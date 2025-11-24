@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os, time, random
 import pandas as pd
 import torch
@@ -10,15 +7,12 @@ from rdkit import Chem
 from rdkit import RDLogger
 from torch_geometric.data import Data, Dataset
 from torch_geometric.loader import DataLoader
-from edge_aware_gnn import EdgeAwareGNN  # keep your file
+from edge_aware_gnn import EdgeAwareGNN
 
-# ================== Toggles & Base Config ==================
 STANDARDIZE_Y   = True
 USE_SCHEDULER   = True
 USE_BN          = True
 SAVE_VAL_PREDS  = True
-
-# More stable defaults vs your last run
 CSV_PATH   = "dataset_6_chloroquinoline.csv"
 TARGET_COL = "Product_Yield_PCT_Area_UV"
 
@@ -32,11 +26,11 @@ SMILES_COLS = [
 ]
 
 # Feature switches
-ROLE_ONE_HOT     = True    # one-hot roles (better than numeric)
-EDGE_ONE_HOT     = True    # one-hot bonds (S/D/T/A) instead of 1/2/3/1.5
-RICH_NODE_FEATS  = True    # add valence/degree/charge/aromatic/ring/hybridization
+ROLE_ONE_HOT     = True
+EDGE_ONE_HOT     = True
+RICH_NODE_FEATS  = True
 
-# Training hyperparams (safer on CPU)
+# Training hyperparams
 BATCH_SIZE = 64
 EPOCHS     = 200
 LR         = 1e-4
@@ -47,21 +41,9 @@ VAL_SPLIT  = 0.2
 SEED       = 42
 WD         = 1e-4
 CLIP_NORM  = 1.0
-WEIGHT_HIGH_YIELD = False  # start False; you can try True after you stabilize
-# Training hyperparams (safer on CPU)
-#BATCH_SIZE = 128
-#EPOCHS     = 150
-#LR         = 3e-4
-#HIDDEN     = 256
-#LAYERS     = 3
-#DROPOUT    = 0.1
-#VAL_SPLIT  = 0.2
-#SEED       = 42
-#WD         = 5e-4
-#CLIP_NORM  = 1.0
-#WEIGHT_HIGH_YIELD = False  # start False; you can try True after you stabilize
+WEIGHT_HIGH_YIELD = False
 
-# ================== Misc ==================
+
 for lvl in ("rdApp.error", "rdApp.warning", "rdApp.info", "rdApp.debug"):
     RDLogger.DisableLog(lvl)
 
@@ -80,8 +62,8 @@ def norm(x):
     if s.lower() in BAD_TOKENS: return None
     if s in BAD_SMILES: return None
     return s
-
-# ================== Feature Builders ==================
+    
+# Feature Builders
 HYB_LIST = [
     Chem.rdchem.HybridizationType.SP,
     Chem.rdchem.HybridizationType.SP2,
@@ -199,7 +181,7 @@ def union_graphs_with_role(graphs, roles, num_roles):
     edge_attr  = torch.cat(eattrs, dim=0) if eattrs else torch.empty((0, (4 if EDGE_ONE_HOT else 1)), dtype=x.dtype)
     return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
-# ================== Dataset ==================
+
 class ReactionRowDataset(Dataset):
     def __init__(self, df, smiles_cols, target_col):
         super().__init__()
@@ -255,7 +237,7 @@ class ReactionRowDataset(Dataset):
         val = float(row[self.target_col])
         y  = torch.tensor([(val - y_mean) / y_std], dtype=torch.float)
 
-        # Fallback (rare)
+
         if G is None:
             base_dim = (10 if RICH_NODE_FEATS else 1)
             role_dim = (self.num_roles if ROLE_ONE_HOT else 1)
@@ -266,20 +248,19 @@ class ReactionRowDataset(Dataset):
         G.y = y
         return G
 
-# ================== Helpers ==================
+
 def infer_dims(loader, device):
     for b in loader:
         b = b.to(device)
         node_in = int(b.x.size(1))
         edge_in = int(b.edge_attr.size(1)) if getattr(b, "edge_attr", None) is not None else 0
         return node_in, edge_in
-    # worst-case defaults
     return (10 if RICH_NODE_FEATS else 1) + (len(SMILES_COLS) if ROLE_ONE_HOT else 1), (4 if EDGE_ONE_HOT else 1)
 
-def unscale(t):  # standardized
+def unscale(t): 
     return t * y_std + y_mean
 
-# ================== Train ==================
+# Training Loop
 def main():
     set_seed()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -349,8 +330,6 @@ def main():
                     w = torch.where(y_real >= thr, 2.0, 1.0)
                 else:
                     w = 1.0
-
-                # robust loss without aggressive weighting
                 mse   = F.mse_loss(pred, y_std_tgt, reduction='none')
                 huber = F.smooth_l1_loss(pred, y_std_tgt, beta=1.0, reduction='none')
                 loss  = (0.5*mse + 0.5*huber) * w
@@ -386,7 +365,7 @@ def main():
     torch.save(model.state_dict(), "gnn_yield_min.pt")
     print("Saved model to gnn_yield_min.pt")
 
-    # ---- Plots ----
+
     os.makedirs("figs", exist_ok=True)
 
     plt.figure(); plt.plot(hist["train"], label="train MSE"); plt.plot(hist["val"], label="val MSE")
@@ -402,7 +381,6 @@ def main():
     plt.tight_layout(); plt.savefig("figs/lr_schedule.png", dpi=150); plt.close()
     print("Saved: figs/loss_curves.png, figs/val_mse_vs_time.png, figs/lr_schedule.png")
 
-    # ---- Final metrics in original units + parity ----
     def collect_preds(loader):
         model.eval(); Ys, Ps = [], []
         with torch.no_grad():
